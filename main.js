@@ -21,15 +21,38 @@ var tikzpicture = {
 	code : ""
 }
 
-var actions = {
-	actionStackSize : 20,
-	past : [],		//Stack of actions
-	future : [],	//Stack of actions
-	current : null	//Action
-}
+var actionHistory = (function(){
+	var actionStackSize = 20;
+	var past = [];		//Stack of actions
+	var future = [];	//Stack of actions
+	//current : null	//Action
+
+	return new function(){
+		this.undo = function(){
+			if (past.length == 0)
+				return;
+			var a = past.pop();
+			actions[a.type].undoAction(a);
+			future.push(a);
+		}
+		this.redo = function(){
+			if (future.length == 0)
+				return;
+			var a = future.pop();
+			actions[a.type].redoAction(a);
+			past.push(a);
+		}
+		this.add = function(a){
+			past.push(a);
+			future = [];
+		}
+	}
+})();
 
 function main()
 {
+	addActions();
+
 	var content = "";
 
 	content += "<div class='main'>";
@@ -41,10 +64,7 @@ function main()
 	content += "<div class='form'>";
 	content += "<form>";
 	content += "Action: <br/>";
-	for (var i = 0; i < ACTIONS.length; i++)
-	{
-		content += "<input type='radio' name='action' value='"+ACTIONS[i][0]+"'> "+ACTIONS[i][1]+" <br/>";
-	}
+	content += interface.menu;
 	content += "Snap: <br/>";
 	for (var i = 0; i < SNAP.length; i++)
 	{
@@ -55,22 +75,7 @@ function main()
 	content += "Horizontal offset: <input type='range' name='hoffset' min='0' max='100' value='0'><br/>";
 	content += "<div class='submenu'>";
 
-	//Add Node menu
-	content += "<div id='addMenu'>"
-			 + "Radius: <input type='textfield' name='radius' value='15'><br/>"
-			 + "</div>";
-	//Delete menu
-	content += "<div id='delMenu'>"
-			 + "delMenu"
-			 + "</div>";
-	//Add Edge menu
-	content += "<div id='addEdgeMenu'>"
-			 + "addEdgeMenu"
-			 + "</div>";
-	//Add curve menu
-	content += "<div id='addCurveMenu'>"
-			 + "addCurve"
-			 + "</div>";
+	content += interface.submenu;
 
 	content += "</div>";
 	content += "</form>";
@@ -95,52 +100,50 @@ function updateCode()
 	tikzpicture.code = "";
 	for (var i = 0; i < tikzpicture.nodes.length; i++)
 	{
-		//code += "\\node (" + i + ") at (" + tikzpicture.nodes[i].x + "," + tikzpicture.nodes[i].y + ") {};\n";
 		tikzpicture.code += "\\node[circle, draw] (" + i + ") at (" + tikzpicture.nodes[i].coord.x/tikzpicture.gridSize + "," + -tikzpicture.nodes[i].coord.y/tikzpicture.gridSize + ") {};\n";
+		tikzpicture.nodes[i].index = i;
 	}
 	for (var i = 0; i < tikzpicture.edges.length; i++)
 	{
-		tikzpicture.code += "\\draw (" + tikzpicture.edges[i].end1 + ") edge (" + tikzpicture.edges[i].end2 + ");\n";
+		tikzpicture.code += "\\draw (" + tikzpicture.edges[i].end1.index + ") edge (" + tikzpicture.edges[i].end2.index + ");\n";
 	}
 	$("textarea").text(tikzpicture.code);
 }
 
-function getAction()
-{
-	return $("input[name='action']:checked").val();
-}
 function getSnap()
 {
 	return $("input[name='snap']:checked").val();
+}
+
+function getCurrentAction()
+{
+	return $("input[name='action']:checked").val();
 }
 
 /**
 * @param {number} num
 *	number pressed
 */
-function setAction(num)
+function setCurrentAction(num)
 {
-	var prev = getAction();
-	//Hide submenu
-	if (prev)
+	var prev = getCurrentAction();
+	if (prev) 
 	{
+		//Hide submenu (If something was previously selected)
 		$("#"+prev+"Menu").hide();
 		$("#"+prev+"Menu").css("visibility", "hidden");
+
+		actions[prev].onDeselect(); //Do stuff for switching away from an action
 	}
-	//Do stuff for switching away from an action
-	switch (prev)
-	{
-		case "addEdge":
-			tikzpicture.selectedNode = null;
-			break;
-		case "addCurve":
-			Curve.completeLastCurve();
-			break;
-	}
-	$("input:radio[name='action']").val([ACTIONS[num-1][0]]);
+
+	//Set to new action
+	action = getAction(num);
+	actions[action].onSelect();
+	$("input:radio[name='action']").val([action]); //Update radio button
+
 	//Show new submenu
-	$("#"+ACTIONS[num-1][0]+"Menu").css("visibility","visible");
-	$("#"+ACTIONS[num-1][0]+"Menu").show();
+	$("#"+action+"Menu").css("visibility","visible");
+	$("#"+action+"Menu").show();
 }
 
 function getCoords(event)
@@ -191,9 +194,7 @@ function snapToGrid(coord)
 function Action()
 {
 	this.type = "";		//String representing the action type (e.g. "addNode")
-	this.coords = [];	//Array of coordinates relevant to the action
-	this.nodes = [];	//Array of nodes
-	this.num = [];		//Array of numbers
+	this.data = [];
 }
 
 function Coord()
@@ -239,13 +240,17 @@ function Node()
 	this.coord = new Coord();
 	this.radius = 15;
 	this.content = "";
+
+	this.index = 0; //Updated in updateCode() for use immediately after
 }
 Node.addNode = function(coord)
 {
 	coord = snapToGrid(coord);
 	var n = new Node();
 	n.coord = coord;
-	tikzpicture.nodes.push(n); //TODO: Change tikzpicture.nodes to use the Node object
+	n.radius = $("input[name=radius]").val();
+	tikzpicture.nodes.push(n); 
+	return n;
 }
 /**
  * @param {Coord} coord
@@ -270,6 +275,7 @@ Node.getNodes = function(coord)
 Node.delNodes = function(coord)
 {
 	var n = Node.getNodes(coord);
+	var e = [];
 	for (var i = 0; i < n.length; i++)
 	{
 		//Check for edges containing this node
@@ -277,25 +283,27 @@ Node.delNodes = function(coord)
 		{
 			if (tikzpicture.edges[j].contains(n[i]))
 			{
+				e.push(tikzpicture.edges[j]);
 				tikzpicture.edges.splice(j,1);
 			}
 		}
-		//Remove the node
+		//Remove the node and return it
 		var index = tikzpicture.nodes.indexOf(n[i]);
 		tikzpicture.nodes.splice(index,1);
 	}
+	return [n,e];
 }
 
 function Edge()
 {
-	this.end1;	//Index of "nodes"
-	this.end2;	//Index of "nodes"
+	this.end1;	//Reference to node object
+	this.end2;	//Reference to node object
+
 	/**
 	 * @param {Node} e
 	 */
 	this.contains = function(e)
 	{
-		//return ((tikzpicture.nodes[this.end1] == e) || (tikzpicture.nodes[this.end2] == e));
 		return ((this.end1 == e) || (this.end2 == e));
 	}
 }
@@ -309,13 +317,13 @@ Edge.addEdge = function(coord)
 	if (tikzpicture.selectedNode == null)
 	{
 		tikzpicture.selectedNode = n[0];
-		return;
+		return null;
 	}
 
 	if (tikzpicture.selectedNode == n[0])
 	{
 		tikzpicture.selectedNode = null;
-		return;
+		return null;
 	}
 
 	//TODO: Check for repeated edges
@@ -326,6 +334,7 @@ Edge.addEdge = function(coord)
 	temp.end2 = n[0];
 	tikzpicture.edges.push(temp);
 	tikzpicture.selectedNode = null;
+	return temp;
 }
 
 function Curve()

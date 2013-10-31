@@ -1,35 +1,49 @@
 var tikzInput = {
+	onClickListeners: [],
+	onDragListeners: [],
+	onKeyPressListeners: [],
 	init: function()
 	{
 		$("canvas").click(function(event)
 		{
 			var coords = getCoords(event);
-			switch (getAction())
-			{
-				case "add":
-					Node.addNode(coords);
-					break;
-				case "del":
-					Node.delNodes(coords);
-					break;
-				case "addEdge":
-					Edge.addEdge(coords);
-					break;
-				case "addCurve":
-					Curve.addCurve(coords);
-					break;
-			}
+
+			if (actions[getCurrentAction()].onClick)
+				actions[getCurrentAction()].onClick(coords);
+
 			redraw();
 			updateCode();
 		});
 		$("body").keypress(function(event)
 		{
-			if (event.which >= 49 && event.which <= 52)
+			//Numbers 1-9
+			if (event.which >= 49 && event.which <= 49+9)
 			{
-				setAction(event.which-48);
+				setCurrentAction(event.which-48);
+				redraw();
 				return;
 			}
-			//alert(event.which + " " + event.ctrlKey);
+			//ctrl+...
+			if (event.ctrlKey)
+			{
+				//ctrl+z
+				switch (event.which)
+				{
+					case 26: //ctrl+z
+						actionHistory.undo();
+						break;
+					case 25: //ctrl+y
+						actionHistory.redo();
+						break;
+				}
+				redraw();
+				return;
+			}
+			
+			//All other actions
+			if (actions[getCurrentAction()].onKeyPress)
+				actions[getCurrentAction()].onKeyPress(event);
+			redraw();
 		});
 		$("input[name='voffset']").change(function()
 		{
